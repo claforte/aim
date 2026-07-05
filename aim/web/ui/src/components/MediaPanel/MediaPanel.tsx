@@ -63,6 +63,8 @@ function MediaPanel({
   const requestRef = React.useRef<any>();
   const scrollTopOffset = React.useRef<number>(0);
   const rafMouseOverId = React.useRef<number>(0);
+  const blobFetchRetryCounts = React.useRef<Record<string, number>>({});
+  const isMountedRef = React.useRef<boolean>(true);
 
   const setActiveElemPos = React.useCallback(() => {
     if (activePointRef.current && containerRef.current) {
@@ -224,9 +226,32 @@ function MediaPanel({
         ];
         requestRef.current = getBlobsData(processingBlobUriArray);
         requestRef.current.call().catch((err: any) => {
+          // The batch request failed or was aborted (e.g. by fast scrolling).
+          // Un-mark its URIs as processed so they can be requested again;
+          // otherwise the images stay blank until the panel is remounted.
           processedBlobUriArray.current = processedBlobUriArray.current.filter(
             (uri: string) => !processingBlobUriArray.includes(uri),
           );
+          if (isMountedRef.current) {
+            // Re-queue URIs which are still missing from the cache, with a
+            // bounded number of retries to avoid infinite request loops.
+            const retryableUris = processingBlobUriArray.filter(
+              (uri: string) => {
+                if (blobsURIModel.getState()[uri]) {
+                  return false;
+                }
+                const retryCount = blobFetchRetryCounts.current[uri] ?? 0;
+                blobFetchRetryCounts.current[uri] = retryCount + 1;
+                return retryCount < 3;
+              },
+            );
+            if (!_.isEmpty(retryableUris)) {
+              blobUriArray.current = [
+                ...new Set([...blobUriArray.current, ...retryableUris]),
+              ];
+              getBatch();
+            }
+          }
         });
       }
     }, BATCH_SEND_DELAY);
@@ -250,7 +275,9 @@ function MediaPanel({
   }, [closePopover]);
 
   React.useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
       if (timeoutID.current) {
         window.clearTimeout(timeoutID.current);
       }
