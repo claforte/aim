@@ -74,12 +74,12 @@ function ImagesVisualizer(
             }
           })
           .catch((ex) => {
-            if (ex.name === 'AbortError') {
-              // Abort Error
-            } else {
+            if (ex.name !== 'AbortError') {
               // eslint-disable-next-line no-console
               console.log('Unhandled error: ');
             }
+            // rethrow so the caller (MediaPanel) can re-queue the affected URIs
+            throw ex;
           });
       },
     };
