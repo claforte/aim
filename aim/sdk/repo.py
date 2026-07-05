@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import shutil
@@ -375,6 +376,47 @@ class Repo:
     def run_exists(self, run_hash: str) -> bool:
         return run_hash in self._all_run_hashes()
 
+    def is_run_in_progress(self, run_hash: str) -> bool:
+        """Check whether the run with the given hash is currently being tracked.
+
+        A run is considered in progress while its writer keeps the progress
+        marker file (`meta/progress/<run_hash>`) alive. The marker is removed
+        when the run is closed or marked as terminated.
+        """
+        if self.is_remote_repo:
+            # remote repo reads are served by the tracking server, which
+            # constructs local Run objects on its side.
+            return False
+        progress_path = os.path.join(self.path, 'meta', 'progress', run_hash)
+        return os.path.exists(progress_path)
+
+    def run_chunk_checksum(self, run_hash: str) -> str:
+        """Calculate the checksum of the run's meta chunk directory contents.
+
+        The checksum is based on file names, mtimes and sizes; it is stored in
+        the index db (under `('index_cache', run_hash)`) when a run gets indexed,
+        so comparing the stored value against the current one tells whether the
+        index holds up-to-date data for the run.
+        """
+        chunk_dir = os.path.join(self.path, 'meta', 'chunks', run_hash)
+        hash_obj = hashlib.md5()
+
+        for root, _dirs, files in os.walk(chunk_dir):
+            for name in sorted(files):  # sort to ensure consistent order
+                if name.startswith('LOG'):  # skip access logs
+                    continue
+                filepath = os.path.join(root, name)
+                try:
+                    stat = os.stat(filepath)
+                    hash_obj.update(filepath.encode('utf-8'))
+                    hash_obj.update(str(stat.st_mtime).encode('utf-8'))
+                    hash_obj.update(str(stat.st_size).encode('utf-8'))
+                except FileNotFoundError:
+                    # File might have been deleted between os.walk and os.stat
+                    continue
+
+        return hash_obj.hexdigest()
+
     def is_index_corrupted(self) -> bool:
         corruption_marker = os.path.join(self.path, 'meta', 'index', '.corrupted')
         return os.path.exists(corruption_marker)
@@ -435,11 +477,19 @@ class Repo:
         Returns:
             :obj:`Run` object if hash is found in repository. `None` otherwise.
         """
-        # TODO: [MV] optimize existence check for run
-        if run_hash is None or run_hash not in self.meta_tree.subtree('chunks').keys():
+        # Check the run chunks instead of the index-backed meta tree; in-progress
+        # runs may exist in the repo before they have ever been indexed.
+        if run_hash is None:
             return None
+        if self.is_remote_repo:
+            exists = self.run_exists(run_hash)
         else:
-            return Run(run_hash, repo=self, read_only=True)
+            # check the chunk directory directly to avoid the ttl-cached
+            # `_all_run_hashes` momentarily hiding just-created runs
+            exists = os.path.exists(os.path.join(self.path, 'meta', 'chunks', run_hash))
+        if not exists:
+            return None
+        return Run(run_hash, repo=self, read_only=True)
 
     def query_runs(
         self,

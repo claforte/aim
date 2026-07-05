@@ -214,7 +214,7 @@ class RunImagesURIBulkLoadApi(RunImagesTestBase):
     @parameterized.expand([(1,), (5,), (10,)])
     def test_images_uri_bulk_load_api(self, uri_count):
         # take random N URIs
-        uris = random.sample(self.uri_map.keys(), uri_count)
+        uris = random.sample(sorted(self.uri_map.keys()), uri_count)
 
         client = self.client
         response = client.post('/api/runs/images/get-batch', json=uris)
@@ -475,3 +475,101 @@ class TestRunInfoApi(ApiTestBase):
         client = self.client
         response = client.get(f'/api/runs/{self.run1_hash}/info/', params={'sequence': 'non-existing-sequence'})
         self.assertEqual(400, response.status_code)
+
+
+class TestInProgressRunImagesBatchApi(ApiTestBase):
+    """Regression tests for stale sequence info of in-progress runs.
+
+    The repo-level index is updated asynchronously (if at all), so for runs
+    which are still in progress the API must read from the run's own chunk;
+    otherwise record ranges get stuck at whatever was last indexed (or the
+    run is not found at all if it has never been indexed).
+    """
+
+    def _get_images_batch(self, run_hash):
+        response = self.client.post(
+            f'/api/runs/{run_hash}/images/get-batch/',
+            json=[{'name': 'live_images', 'context': {}}],
+        )
+        self.assertEqual(200, response.status_code)
+        return decode_tree(decode_encoded_tree_stream(response.iter_bytes(chunk_size=512 * 1024)))
+
+    @staticmethod
+    def _flush_tracking_queue():
+        from aim.sdk.repo import Repo
+
+        if Repo.tracking_queue is not None:
+            Repo.tracking_queue._queue.join()
+
+    def test_live_run_record_ranges_advance_without_reindexing(self):
+        run = self.create_run(repo=self.repo, system_tracking_interval=None)
+        run_hash = run.hash
+        try:
+            for step in range(10):
+                images = generate_image_set(img_count=2, caption_prefix=f'Image {step}')
+                run.track(images, name='live_images', step=step)
+            self._flush_tracking_queue()
+
+            # simulate the one-off indexing which happens when e.g. `aim up` first sees the run
+            RepoIndexManager.get_index_manager(self.repo).index(run_hash)
+            self.repo.container_pool.clear()
+
+            trace_data = self._get_images_batch(run_hash)
+            self.assertEqual([0, 10], trace_data['record_range_total'])
+
+            # track more steps; the index is now stale but the API must serve current bounds
+            for step in range(10, 20):
+                images = generate_image_set(img_count=2, caption_prefix=f'Image {step}')
+                run.track(images, name='live_images', step=step)
+            self._flush_tracking_queue()
+
+            trace_data = self._get_images_batch(run_hash)
+            self.assertEqual([0, 20], trace_data['record_range_total'])
+            self.assertEqual(19, trace_data['iters'][-1])
+        finally:
+            run.close()
+
+    def test_never_indexed_live_run_is_served(self):
+        run = self.create_run(repo=self.repo, system_tracking_interval=None)
+        run_hash = run.hash
+        try:
+            for step in range(5):
+                images = generate_image_set(img_count=2, caption_prefix=f'Image {step}')
+                run.track(images, name='live_images', step=step)
+            self._flush_tracking_queue()
+
+            response = self.client.get(f'/api/runs/{run_hash}/info/', params={'sequence': 'images'})
+            self.assertEqual(200, response.status_code)
+            response_data = response.json()
+            self.assertEqual('live_images', response_data['traces']['images'][0]['name'])
+
+            trace_data = self._get_images_batch(run_hash)
+            self.assertEqual([0, 5], trace_data['record_range_total'])
+        finally:
+            run.close()
+
+    def test_finished_run_with_stale_index_is_served(self):
+        run = self.create_run(repo=self.repo, system_tracking_interval=None)
+        run_hash = run.hash
+        try:
+            for step in range(10):
+                images = generate_image_set(img_count=2, caption_prefix=f'Image {step}')
+                run.track(images, name='live_images', step=step)
+            self._flush_tracking_queue()
+
+            # index the run mid-way; further data makes the index entry stale
+            RepoIndexManager.get_index_manager(self.repo).index(run_hash)
+
+            for step in range(10, 20):
+                images = generate_image_set(img_count=2, caption_prefix=f'Image {step}')
+                run.track(images, name='live_images', step=step)
+            self._flush_tracking_queue()
+        finally:
+            run.close()
+
+        self.repo.container_pool.clear()
+        # the run is finished (not in progress) and its index entry is stale;
+        # the API must still serve the current bounds
+        trace_data = self._get_images_batch(run_hash)
+        self.assertEqual([0, 20], trace_data['record_range_total'])
+        self.assertEqual(19, trace_data['iters'][-1])

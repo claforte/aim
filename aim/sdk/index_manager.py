@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import os
 import queue
@@ -203,20 +202,6 @@ class RepoIndexManager:
         return self._get_run_checksum(run_hash) != index_db.get(('index_cache', run_hash))
 
     def _get_run_checksum(self, run_hash):
-        hash_obj = hashlib.md5()
-
-        for root, dirs, files in os.walk(os.path.join(self.chunks_dir, run_hash)):
-            for name in sorted(files):  # sort to ensure consistent order
-                if name.startswith('LOG'):  # skip access logs
-                    continue
-                filepath = os.path.join(root, name)
-                try:
-                    stat = os.stat(filepath)
-                    hash_obj.update(filepath.encode('utf-8'))
-                    hash_obj.update(str(stat.st_mtime).encode('utf-8'))
-                    hash_obj.update(str(stat.st_size).encode('utf-8'))
-                except FileNotFoundError:
-                    # File might have been deleted between os.walk and os.stat
-                    continue
-
-        return hash_obj.hexdigest()
+        # single source of truth for the checksum implementation: readers
+        # (see `BaseRun._read_only_meta_tree`) compare against the stored value
+        return self.repo.run_chunk_checksum(run_hash)

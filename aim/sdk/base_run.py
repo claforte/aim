@@ -39,7 +39,7 @@ class BaseRun:
         if self.read_only:
             assert run_hash is not None
             self.hash = run_hash
-            self.meta_tree: TreeView = self.repo.request_tree('meta', read_only=True).subtree('meta')
+            self.meta_tree: TreeView = self._read_only_meta_tree()
         else:
             if run_hash is None:
                 self.hash = generate_run_hash()
@@ -55,6 +55,40 @@ class BaseRun:
 
         self._series_run_trees: Dict[int, TreeView] = None
 
+    def _read_only_meta_tree(self) -> TreeView:
+        """Meta tree to be used for read-only runs.
+
+        By default the repo-level (index-backed) meta tree is used, as it is much
+        cheaper to access when reading many runs. However, the index is updated
+        asynchronously (if at all; e.g. plain `uvicorn aim.web.run:app` deployments
+        have no index manager running), so it may serve stale sequence info (such
+        as the `last_step` of live image sequences) or no data at all for runs
+        which are in progress, have never been indexed, or have received data
+        since they were last indexed. For those runs, read from the run's own
+        chunk, which is always up-to-date. `skip_read_optimization` is set to
+        avoid touching a live writer's WAL; read-only opens still see the latest
+        data.
+        """
+        if not self.repo.is_remote_repo:
+            index_tree: TreeView = self.repo.request_tree('meta', read_only=True)
+            if self.repo.is_run_in_progress(self.hash) or self._index_data_stale(index_tree):
+                return self.repo.request_tree('meta', self.hash, read_only=True, skip_read_optimization=True).subtree(
+                    'meta'
+                )
+            return index_tree.subtree('meta')
+        return self.repo.request_tree('meta', read_only=True).subtree('meta')
+
+    def _index_data_stale(self, index_tree: TreeView) -> bool:
+        try:
+            index_tree.subtree(('meta', 'chunks', self.hash)).first_key()
+        except (KeyError, StopIteration):
+            # the run has never been indexed
+            return True
+        # the index manager stores the run chunk checksum when indexing a run;
+        # a mismatch means the run chunk has changed since it was last indexed
+        stored_checksum = index_tree.get(('index_cache', self.hash))
+        return stored_checksum is not None and stored_checksum != self.repo.run_chunk_checksum(self.hash)
+
     def __hash__(self) -> int:
         if self._hash is None:
             self._hash = self._calc_hash()
@@ -66,7 +100,13 @@ class BaseRun:
     @property
     def series_run_trees(self) -> Dict[int, TreeView]:
         if self._series_run_trees is None:
-            series_tree = self.repo.request_tree('seqs', self.hash, read_only=self.read_only).subtree('seqs')
+            # For read-only access to in-progress runs, skip the read optimization
+            # (write-mode WAL flush): the live writer's rocksdb lock makes it fail
+            # anyway, and in same-process setups it could corrupt the writer.
+            skip_read_optimization = self.read_only and self.repo.is_run_in_progress(self.hash)
+            series_tree = self.repo.request_tree(
+                'seqs', self.hash, read_only=self.read_only, skip_read_optimization=skip_read_optimization
+            ).subtree('seqs')
             self._series_run_trees = {}
             for version in STEP_HASH_FUNCTIONS.keys():
                 if version == 1:
