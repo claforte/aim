@@ -55,7 +55,14 @@ class URIService:
             for uri, sub_name, resource_path in self.runs_pool[run_name]:
                 container = run_containers.get(sub_name)
                 if not container:
-                    container = self.repo.request_container(sub_name, run_name, read_only=True)
+                    # skip the read optimization (write-mode WAL flush) for
+                    # in-progress runs to avoid touching the live writer's WAL
+                    container = self.repo.request_container(
+                        sub_name,
+                        run_name,
+                        read_only=True,
+                        skip_read_optimization=self.repo.is_run_in_progress(run_name),
+                    )
                     run_containers[sub_name] = container
 
                 resource_path = decode_path(bytes.fromhex(resource_path))
