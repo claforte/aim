@@ -129,7 +129,7 @@ def fill_up_test_data(extra_params: dict = None):
                         val = 1.0 - 1.0 / (step + 1)
                         run.track(val, name=metric, step=step, epoch=1, context=context)
         for run in runs:
-            run.finalize()
+            run.close()
 
 
 def is_package_installed(pkg_name: str) -> bool:
