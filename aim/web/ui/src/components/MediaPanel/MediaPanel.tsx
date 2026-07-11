@@ -225,34 +225,47 @@ function MediaPanel({
           ]),
         ];
         requestRef.current = getBlobsData(processingBlobUriArray);
-        requestRef.current.call().catch((err: any) => {
-          // The batch request failed or was aborted (e.g. by fast scrolling).
-          // Un-mark its URIs as processed so they can be requested again;
-          // otherwise the images stay blank until the panel is remounted.
-          processedBlobUriArray.current = processedBlobUriArray.current.filter(
-            (uri: string) => !processingBlobUriArray.includes(uri),
-          );
-          if (isMountedRef.current) {
-            // Re-queue URIs which are still missing from the cache, with a
-            // bounded number of retries to avoid infinite request loops.
-            const retryableUris = processingBlobUriArray.filter(
-              (uri: string) => {
-                if (blobsURIModel.getState()[uri]) {
-                  return false;
-                }
-                const retryCount = blobFetchRetryCounts.current[uri] ?? 0;
-                blobFetchRetryCounts.current[uri] = retryCount + 1;
-                return retryCount < 3;
-              },
-            );
-            if (!_.isEmpty(retryableUris)) {
-              blobUriArray.current = [
-                ...new Set([...blobUriArray.current, ...retryableUris]),
-              ];
-              getBatch();
+        requestRef.current
+          .call()
+          .then(() => {
+            // Batch landed: reset the retry budget of its URIs. Without this,
+            // every abort-and-recover cycle (each ~MB-scale batch outlives a
+            // fast image switch) permanently consumed budget, so the ~3rd
+            // switch of the same image exhausted it and left dead skeletons
+            // until remount.
+            processingBlobUriArray.forEach((uri: string) => {
+              delete blobFetchRetryCounts.current[uri];
+            });
+          })
+          .catch((err: any) => {
+            // The batch request failed or was aborted (e.g. by fast scrolling).
+            // Un-mark its URIs as processed so they can be requested again;
+            // otherwise the images stay blank until the panel is remounted.
+            processedBlobUriArray.current =
+              processedBlobUriArray.current.filter(
+                (uri: string) => !processingBlobUriArray.includes(uri),
+              );
+            if (isMountedRef.current) {
+              // Re-queue URIs which are still missing from the cache, with a
+              // bounded number of retries to avoid infinite request loops.
+              const retryableUris = processingBlobUriArray.filter(
+                (uri: string) => {
+                  if (blobsURIModel.getState()[uri]) {
+                    return false;
+                  }
+                  const retryCount = blobFetchRetryCounts.current[uri] ?? 0;
+                  blobFetchRetryCounts.current[uri] = retryCount + 1;
+                  return retryCount < 3;
+                },
+              );
+              if (!_.isEmpty(retryableUris)) {
+                blobUriArray.current = [
+                  ...new Set([...blobUriArray.current, ...retryableUris]),
+                ];
+                getBatch();
+              }
             }
-          }
-        });
+          });
       }
     }, BATCH_SEND_DELAY);
   }, BATCH_SEND_DELAY);
