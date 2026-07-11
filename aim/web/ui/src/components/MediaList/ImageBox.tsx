@@ -87,7 +87,7 @@ const ImageBox = ({
     };
   }, [addUriToList, blobData, blob_uri]);
 
-  function onImageFullSizeModeButtonClick(e: React.ChangeEvent<any>): void {
+  function onImageFullSizeModeButtonClick(e: React.SyntheticEvent): void {
     e.stopPropagation();
     setIsImageFullViewPopupOpened(true);
     analytics.trackEvent(
@@ -135,6 +135,7 @@ const ImageBox = ({
                 <img
                   src={`data:image/${format};base64, ${blobData}`}
                   alt={data.caption}
+                  onDoubleClick={onImageFullSizeModeButtonClick}
                 />
               ) : (
                 <div

@@ -101,6 +101,19 @@ const tabs: Record<string, string> = {
 
 const mediaRouteKeys = ['images', 'videos', 'audios'];
 
+// visualization-heavy tabs use the full viewport width instead of the
+// centered 1420px `.container` cap (wide monitors: media panels were
+// stranded in a half-empty page)
+const fullWidthTabKeys = new Set([
+  ...mediaRouteKeys,
+  'media',
+  'metrics',
+  'system',
+  'distributions',
+  'figures',
+  'logs',
+]);
+
 function isMediaRouteKey(
   value?: string,
 ): value is 'images' | 'videos' | 'audios' {
@@ -501,7 +514,15 @@ function RunDetail(): React.FunctionComponentElement<React.ReactNode> {
                         </div>
                       ) : (
                         <div className='RunDetail__runDetailContainer__tabPanelBox'>
-                          <div className='RunDetail__runDetailContainer__tabPanel container'>
+                          <div
+                            className={classNames(
+                              'RunDetail__runDetailContainer__tabPanel',
+                              {
+                                container: !fullWidthTabKeys.has(tabKey),
+                                fullWidth: fullWidthTabKeys.has(tabKey),
+                              },
+                            )}
+                          >
                             <React.Suspense
                               fallback={
                                 <div className='RunDetail__runDetailContainer__tabPanelBox__suspenseLoaderContainer'>

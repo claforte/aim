@@ -1,6 +1,8 @@
 import React, { memo } from 'react';
 import { useResizeObserver } from 'hooks';
 
+import { Slider, Tooltip } from '@material-ui/core';
+
 import { MediaTypeEnum } from 'components/MediaPanel/config';
 import MediaPanel from 'components/MediaPanel';
 import BusyLoaderWrapper from 'components/BusyLoaderWrapper/BusyLoaderWrapper';
@@ -24,6 +26,14 @@ import arrayBufferToBase64 from 'utils/arrayBufferToBase64';
 import { IImagesVisualizerProps } from '../types';
 
 import './ImagesVisualizer.scss';
+
+const MEDIA_ITEM_SIZE_KEY = 'runDetailImagesMediaItemSize';
+const DEFAULT_MEDIA_ITEM_SIZE = 25;
+
+function getInitialMediaItemSize(): number {
+  const stored = Number(localStorage.getItem(MEDIA_ITEM_SIZE_KEY));
+  return stored >= 10 && stored <= 95 ? stored : DEFAULT_MEDIA_ITEM_SIZE;
+}
 
 function ImagesVisualizer(
   props: IImagesVisualizerProps | any,
@@ -92,13 +102,40 @@ function ImagesVisualizer(
     [],
   );
 
+  const [mediaItemSize, setMediaItemSize] = React.useState<number>(
+    getInitialMediaItemSize,
+  );
+
   const additionalProperties = React.useMemo(() => {
     return {
       alignmentType: MediaItemAlignmentEnum.Height,
-      mediaItemSize: 25,
+      mediaItemSize,
       imageRendering: ImageRenderingEnum.Pixelated,
     };
-  }, []);
+  }, [mediaItemSize]);
+
+  const controls = React.useMemo(
+    () => (
+      <div className='ImagesVisualizer__sizeControl'>
+        <Tooltip title='Image size' placement='left'>
+          <span className='ImagesVisualizer__sizeControl__sliderBox'>
+            <Slider
+              orientation='vertical'
+              value={mediaItemSize}
+              min={10}
+              max={95}
+              step={5}
+              onChange={(e, value) => setMediaItemSize(value as number)}
+              onChangeCommitted={(e, value) =>
+                localStorage.setItem(MEDIA_ITEM_SIZE_KEY, String(value))
+              }
+            />
+          </span>
+        </Tooltip>
+      </div>
+    ),
+    [mediaItemSize],
+  );
 
   const sortFieldsDict = React.useMemo(() => {
     return {
@@ -131,6 +168,7 @@ function ImagesVisualizer(
             wrapperOffsetWidth={offsetWidth || 0}
             sortFieldsDict={sortFieldsDict}
             focusedState={focusedState}
+            controls={controls}
             additionalProperties={additionalProperties}
             onActivePointChange={onActivePointChange}
             illustrationConfig={{ title: 'No Tracked Images' }}
