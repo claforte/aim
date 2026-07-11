@@ -39,6 +39,31 @@ const ImageBox = ({
   React.useEffect(() => {
     let timeoutID: number;
     let subscription: any;
+    let pollCount = 0;
+
+    // Bounded poll instead of a one-shot fallback: this effect's cleanup runs
+    // on every parent re-render (addUriToList is recreated each render), so
+    // the subscription can be torn down while the batched blob response is
+    // still streaming. A model emit landing in that gap — after the single
+    // timeout had already fired and addUriToList refused the still-"processed"
+    // URI — left a permanent skeleton until the tile was remounted
+    // (found 2026-07-10: blob batches returned 200 yet tiles stayed blank;
+    // re-selecting the image rendered instantly from the cache).
+    function pollBlob() {
+      timeoutID = window.setTimeout(() => {
+        if (blobsURIModel.getState()[blob_uri]) {
+          setBlobData(blobsURIModel.getState()[blob_uri]);
+          if (subscription) {
+            subscription.unsubscribe();
+          }
+        } else {
+          addUriToList(blob_uri);
+          if (pollCount++ < 150) {
+            pollBlob();
+          }
+        }
+      }, BATCH_COLLECT_DELAY);
+    }
 
     if (blobData === null) {
       if (blobsURIModel.getState()[blob_uri]) {
@@ -48,14 +73,7 @@ const ImageBox = ({
           setBlobData(data[blob_uri]);
           subscription.unsubscribe();
         });
-        timeoutID = window.setTimeout(() => {
-          if (blobsURIModel.getState()[blob_uri]) {
-            setBlobData(blobsURIModel.getState()[blob_uri]);
-            subscription.unsubscribe();
-          } else {
-            addUriToList(blob_uri);
-          }
-        }, BATCH_COLLECT_DELAY);
+        pollBlob();
       }
     }
 
