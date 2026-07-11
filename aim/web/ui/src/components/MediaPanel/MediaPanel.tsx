@@ -211,10 +211,18 @@ function MediaPanel({
   }
 
   const getBatch = throttle(() => {
+    // Arm-once flush, NOT a trailing debounce: with several pending tiles
+    // re-queueing URIs every BATCH_COLLECT_DELAY (200ms) < BATCH_SEND_DELAY
+    // (300ms), clearing and re-arming the timer on every call starves the
+    // flush forever — no batch is ever dispatched and every tile skeletons,
+    // wedging the whole panel (reproduced 2026-07-10 with a headless click
+    // sweep: a wedged panel never recovered even at a 10s click cadence).
+    // A scheduled flush collects whatever accumulated when it fires.
     if (timeoutID.current) {
-      window.clearTimeout(timeoutID.current);
+      return;
     }
     timeoutID.current = window.setTimeout(() => {
+      timeoutID.current = 0;
       if (!_.isEmpty(blobUriArray.current)) {
         const processingBlobUriArray = Object.assign([], blobUriArray.current);
         blobUriArray.current = [];
