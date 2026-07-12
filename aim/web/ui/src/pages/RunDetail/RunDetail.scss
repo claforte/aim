@@ -144,6 +144,9 @@
     &__tabPanelBox {
       overflow-y: auto;
       height: calc(100vh - 112px);
+      &.mediaPanelBox {
+        overflow-y: hidden;
+      }
       &__suspenseLoaderContainer {
         width: 100%;
         display: flex;

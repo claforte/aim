@@ -513,7 +513,18 @@ function RunDetail(): React.FunctionComponentElement<React.ReactNode> {
                           </React.Suspense>
                         </div>
                       ) : (
-                        <div className='RunDetail__runDetailContainer__tabPanelBox'>
+                        <div
+                          className={classNames(
+                            'RunDetail__runDetailContainer__tabPanelBox',
+                            {
+                              // media visualizers scroll internally; the outer
+                              // bar only ever showed a 1-2px zoom-rounding
+                              // overflow as a useless second scrollbar
+                              mediaPanelBox:
+                                isMediaRouteKey(tabKey) || tabKey === 'media',
+                            },
+                          )}
+                        >
                           <div
                             className={classNames(
                               'RunDetail__runDetailContainer__tabPanel',
