@@ -1,3 +1,5 @@
+> **Fork users:** local build and editable-install instructions are in [FORK.md](FORK.md).
+
 <div align="center">
   <table>
     <tbody>
