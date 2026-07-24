@@ -28,9 +28,9 @@ npm ci
 npm run build
 ```
 
-The generated `aim/web/ui/build` tree is intentionally not committed. Python
-consumers should install both local distributions so they do not mix the forked
-backend with the stock `aim-ui` wheel:
+Git ignores the generated `aim/web/ui/build` tree. Python consumers should
+install both local distributions together, which selects the forked backend and
+the matching `aim-ui` package:
 
 ```toml
 [project]
