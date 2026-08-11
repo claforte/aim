@@ -54,8 +54,11 @@ export function getMenuItemFromRawInfo(
   const sortOrder = alphabeticalSortComparator({
     orderBy: 'name',
     additionalCompare: (name1: string, name2: string) => {
+      if (name1 === 'EMPTY CONTEXT') {
+        return -1;
+      }
       if (name2 === 'EMPTY CONTEXT') {
-        return 0;
+        return 1;
       }
 
       return null;
