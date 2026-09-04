@@ -5,6 +5,10 @@ backend and TypeScript UI changes together, including video/media support,
 live-run indexing fixes, denser media layouts, image zoom, and robust media
 blob loading.
 
+Do not install `aim` or `aim-ui` from PyPI. The stock packages can satisfy the
+same version constraints while serving an upstream UI that lacks this fork's
+Media/Videos support.
+
 ## Local source install
 
 Prerequisites:
@@ -28,9 +32,19 @@ npm ci
 npm run build
 ```
 
-Git ignores the generated `aim/web/ui/build` tree. Python consumers should
-install both local distributions together, which selects the forked backend and
-the matching `aim-ui` package:
+Git ignores the generated `aim/web/ui/build` tree. For a standalone checkout,
+install both local distributions together into a dedicated environment:
+
+```bash
+cd ~/git/aim
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python ./aim/web/ui .
+```
+
+The two local paths in the last command are required. Installing only the root
+package allows its `aim-ui` dependency to resolve to PyPI.
+
+Consumer projects should likewise source both distributions from this checkout:
 
 ```toml
 [project]
