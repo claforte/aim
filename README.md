@@ -1,4 +1,6 @@
-> **Fork users:** local build and editable-install instructions are in [FORK.md](FORK.md).
+> **This fork must be built and installed from source.** Do not install the
+> PyPI `aim` or `aim-ui` packages: they do not contain this fork's Media/Videos
+> UI. See [FORK.md](FORK.md) for the complete local and deployment workflow.
 
 <div align="center">
   <table>
@@ -201,11 +203,23 @@ Check out the two most famous Aim-based tools.
 
 Follow the steps below to get started with Aim.
 
-## 1. Install Aim on your training environment
+## 1. Build and install this fork
 
-```shell
-pip3 install aim
+```bash
+git clone https://github.com/claforte/aim.git
+cd aim/aim/web/ui
+npm ci
+npm run build
+cd ../../..
+
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python ./aim/web/ui .
 ```
+
+Both `aim` and `aim-ui` in this command come from the local checkout. Never
+substitute `pip3 install aim` or a PyPI `aim-ui` wheel; doing so silently serves
+the upstream UI without this fork's Media/Videos support. See [FORK.md](FORK.md)
+for provenance checks and consumer-project configuration.
 
 ## 2. Integrate Aim with your code
 
