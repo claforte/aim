@@ -48,6 +48,14 @@ class SequenceData:
     def step_hash(self, step):
         return self._step_hash_fn(step)
 
+    def has_step(self, step: int) -> bool:
+        step_hash = self.step_hash(step)
+        try:
+            self.arrays[0][step_hash]
+        except KeyError:
+            return False
+        return True
+
     def _checked_columns(self, columns: Union[str, List[str]]) -> List[Tuple[str, str]]:
         if isinstance(columns, str):
             columns = [columns]
@@ -182,6 +190,14 @@ class SequenceV2Data(SequenceData):
 
     def sample(self, k) -> 'SequenceData':
         return SequenceV2Data(self.meta_tree, self.series_tree, columns=self.columns, n_items=k)
+
+    def has_step(self, step: int) -> bool:
+        step_hash = self.step_hash(step)
+        try:
+            stored_step = self.steps[step_hash]
+        except KeyError:
+            return False
+        return stored_step == step
 
     def items_list(self) -> Tuple[List[int], List[Any]]:
         steps, values = self.numpy()
@@ -352,6 +368,13 @@ class Sequence(Generic[T]):
         """
         # fallback to first_step() if 'last_step' key is not yet written
         return self._meta_tree.get('last_step', self.first_step())
+
+    def has_step(self, step: int) -> bool:
+        """Return whether the sequence contains a value at an exact step.
+
+        This performs an indexed lookup without materializing the sequence history.
+        """
+        return self.data.has_step(step)
 
 
 class MediaSequenceBase(Sequence):
