@@ -175,6 +175,10 @@ class Client:
 
     def disconnect(self):
         self._heartbeat_sender.stop()
+        for resource in list(self._resource_pool.values()):
+            resources = getattr(resource, '_resources', None)
+            if resources is not None:
+                resources.close()
         if self._ws:
             self._ws.close()
 
@@ -225,11 +229,12 @@ class Client:
             self.get_queue().wait_for_finish()
 
         response = requests.get(endpoint, headers=self.request_headers, timeout=10, verify=self.ssl_certfile)
-        response_json = response.json()
         if response.status_code == 400:
-            raise_exception(response_json.get('exception'))
+            raise_exception(response.json().get('exception'))
+        if response.status_code != 200:
+            raise RuntimeError(f'Failed to release remote resource {resource_handler}.')
 
-        del self._resource_pool[resource_handler]
+        self._resource_pool.pop(resource_handler, None)
 
     def run_instruction(self, queue_id, resource, method, args=(), is_write_only=False):
         args = deepcopy(args)

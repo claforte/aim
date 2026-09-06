@@ -30,25 +30,39 @@ class BaseRun:
         repo: Optional[Union[str, 'Repo', pathlib.Path]] = None,
         read_only: bool = False,
         force_resume: bool = False,
+        multi_writer: bool = False,
+        experiment: Optional[str] = None,
     ):
         self._hash = None
         self._lock = None
+        self._shared_session = None
 
         self.read_only = read_only
         self.repo = get_repo(repo)
+        if multi_writer and (read_only or not self.repo.is_remote_repo):
+            raise ValueError('multi_writer=True requires a writable remote aim:// repository.')
+        if multi_writer and force_resume:
+            raise ValueError('force_resume cannot be used with multi_writer=True.')
+        self.multi_writer = multi_writer
         if self.read_only:
             assert run_hash is not None
             self.hash = run_hash
             self.meta_tree: TreeView = self._read_only_meta_tree()
         else:
-            if run_hash is None:
+            if multi_writer:
+                from aim.sdk.shared_run_proxy import SharedRunProxy
+
+                self._shared_session = SharedRunProxy(self.repo._client, run_hash, experiment=experiment)
+                self.hash = self._shared_session.hash
+            elif run_hash is None:
                 self.hash = generate_run_hash()
             elif self.repo.run_exists(run_hash):
                 self.hash = run_hash
             else:
                 raise MissingRunError(f'Cannot find Run {run_hash} in aim Repo {self.repo.path}.')
-            self._lock = self.repo.request_run_lock(self.hash)
-            self._lock.lock(force=force_resume)
+            if not multi_writer:
+                self._lock = self.repo.request_run_lock(self.hash)
+                self._lock.lock(force=force_resume)
             self.meta_tree: TreeView = self.repo.request_tree('meta', self.hash, read_only=False).subtree('meta')
 
         self.meta_run_tree: TreeView = self.meta_tree.subtree('chunks').subtree(self.hash)
@@ -76,7 +90,9 @@ class BaseRun:
                     'meta'
                 )
             return index_tree.subtree('meta')
-        return self.repo.request_tree('meta', read_only=True).subtree('meta')
+        # The server-side index may lag behind active writers. Read the run
+        # chunk directly so remote readers can observe shared-session commits.
+        return self.repo.request_tree('meta', self.hash, read_only=True, skip_read_optimization=True).subtree('meta')
 
     def _index_data_stale(self, index_tree: TreeView) -> bool:
         try:

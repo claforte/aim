@@ -150,6 +150,18 @@ class HeartbeatWatcher:
         TrackingRouter.cleanup_client_resources(dead_client_uri)
         ClientRouter.remove_client(dead_client_uri)
 
+    def _release_expired_clients(self):
+        client_uris = list(self._heartbeat_pool.keys())
+        for client_uri in client_uris:
+            last_heartbeat = self._heartbeat_pool.get(client_uri)
+            if last_heartbeat is None:
+                # The client may have disconnected after the keys snapshot.
+                continue
+            now = datetime.datetime.now().timestamp()
+            if now - last_heartbeat > self._client_keep_alive_time:
+                self._release_client_resources(client_uri)
+                self._heartbeat_pool.pop(client_uri, None)
+
     def _interval_check(self):
         while True:
             # Get system statistics
@@ -157,10 +169,4 @@ class HeartbeatWatcher:
                 break
 
             time.sleep(1)
-
-            client_uris = list(self._heartbeat_pool.keys())
-            for client_uri in client_uris:
-                now = datetime.datetime.now().timestamp()
-                if now - self._heartbeat_pool[client_uri] > self._client_keep_alive_time:
-                    self._release_client_resources(client_uri)
-                    del self._heartbeat_pool[client_uri]
+            self._release_expired_clients()

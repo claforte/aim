@@ -79,6 +79,7 @@ class BasicRunAutoClean(AutoClean['BasicRun']):
         self._checkins = instance._checkins
         self._heartbeat = instance._heartbeat
         self._lock = instance._lock
+        self._shared_session = instance._shared_session
 
     def add_extra_resource(self, resource) -> None:
         self.extra_resources.append(resource)
@@ -105,6 +106,9 @@ class BasicRunAutoClean(AutoClean['BasicRun']):
             res.close()
 
         self.empty_rpc_queue()
+        if self._shared_session is not None:
+            self._shared_session.close()
+            return
         self.set_run_end_time()
         if self._heartbeat is not None:
             self._heartbeat.stop()
@@ -128,7 +132,10 @@ class StructuredRunMixin:
 
     @name.setter
     def name(self, value):
-        self.props.name = value
+        if self._shared_session is not None:
+            self._shared_session.set_property('name', value)
+        else:
+            self.props.name = value
 
     @property
     def description(self):
@@ -142,7 +149,10 @@ class StructuredRunMixin:
 
     @description.setter
     def description(self, value):
-        self.props.description = value
+        if self._shared_session is not None:
+            self._shared_session.set_property('description', value)
+        else:
+            self.props.description = value
 
     @property
     def archived(self):
@@ -156,7 +166,10 @@ class StructuredRunMixin:
 
     @archived.setter
     def archived(self, value):
-        self.props.archived = value
+        if self._shared_session is not None:
+            self._shared_session.set_property('archived', value)
+        else:
+            self.props.archived = value
 
     @property
     def creation_time(self):
@@ -230,7 +243,10 @@ class StructuredRunMixin:
 
     @experiment.setter
     def experiment(self, value):
-        self.props.experiment = value
+        if self._shared_session is not None:
+            self._shared_session.set_property('experiment', value)
+        else:
+            self.props.experiment = value
 
     @property
     def tags(self):
@@ -246,6 +262,8 @@ class StructuredRunMixin:
         Args:
             value (:obj:`str`): Tag to add.
         """
+        if self._shared_session is not None:
+            return self._shared_session.add_tag(value)
         return self.props.add_tag(value)
 
     def remove_tag(self, tag_name):
@@ -254,6 +272,8 @@ class StructuredRunMixin:
         Args:
             tag_name (:obj:`str`): :obj:`name` of tag to be removed.
         """
+        if self._shared_session is not None:
+            return self._shared_session.remove_tag(tag_name)
         return self.props.remove_tag(tag_name)
 
 
@@ -268,14 +288,22 @@ class BasicRun(BaseRun, StructuredRunMixin):
         read_only: bool = False,
         experiment: Optional[str] = None,
         force_resume: bool = False,
+        multi_writer: bool = False,
     ):
         self._resources: Optional[BasicRunAutoClean] = None
-        super().__init__(run_hash, repo=repo, read_only=read_only, force_resume=force_resume)
+        super().__init__(
+            run_hash,
+            repo=repo,
+            read_only=read_only,
+            force_resume=force_resume,
+            multi_writer=multi_writer,
+            experiment=experiment,
+        )
 
         self.meta_attrs_tree: TreeView = self.meta_tree.subtree('attrs')
         self.meta_run_attrs_tree: TreeView = self.meta_run_tree.subtree('attrs')
 
-        if not read_only:
+        if not read_only and not multi_writer:
             logger.debug(f'Opening Run {self.hash} in write mode')
 
             if self.check_metrics_version():
@@ -310,7 +338,7 @@ class BasicRun(BaseRun, StructuredRunMixin):
         self._checkins = None
         self._heartbeat = None
 
-        if not read_only:
+        if not read_only and not multi_writer:
             if not self.repo.is_remote_repo:
                 self._checkins = RunStatusReporter(self.hash, LocalFileManager(self.repo.path))
                 progress_flag_path = pathlib.Path(self.repo.path) / 'meta' / 'progress' / self.hash
@@ -353,8 +381,11 @@ class BasicRun(BaseRun, StructuredRunMixin):
             >>> run[...] = params
             >>> run['hparams'] = {'batch_size': 42}
         """
-        self.meta_run_attrs_tree[key] = val
-        self.meta_attrs_tree[key] = val
+        if self._shared_session is not None:
+            self._shared_session.set_item(key, val)
+        else:
+            self.meta_run_attrs_tree[key] = val
+            self.meta_attrs_tree[key] = val
 
     def __getitem__(self, key):
         """Get run meta-parameter by key.
@@ -372,8 +403,11 @@ class BasicRun(BaseRun, StructuredRunMixin):
 
     @noexcept
     def set(self, key, val: Any, strict: bool = True):
-        self.meta_run_attrs_tree.set(key, val, strict)
-        self.meta_attrs_tree.set(key, val, strict)
+        if self._shared_session is not None:
+            self._shared_session.set(key, val, strict)
+        else:
+            self.meta_run_attrs_tree.set(key, val, strict)
+            self.meta_attrs_tree.set(key, val, strict)
 
     def get(self, key, default: Any = None, strict: bool = True, resolve_objects=False):
         try:
@@ -389,8 +423,11 @@ class BasicRun(BaseRun, StructuredRunMixin):
         Args:
             key: meta-parameter path
         """
-        del self.meta_attrs_tree[key]
-        del self.meta_run_attrs_tree[key]
+        if self._shared_session is not None:
+            self._shared_session.del_item(key)
+        else:
+            del self.meta_attrs_tree[key]
+            del self.meta_run_attrs_tree[key]
 
     @noexcept
     def track(
@@ -431,7 +468,10 @@ class BasicRun(BaseRun, StructuredRunMixin):
         if '://' not in uri:
             msg = f'artifacts_uri must start with a scheme, e.g. s3:// or file://. Got "{uri}"'
             warnings.warn(msg, stacklevel=2)
-        self.meta_run_tree['artifacts_uri'] = uri
+        if self._shared_session is not None:
+            self._shared_session.set_artifacts_uri(uri)
+        else:
+            self.meta_run_tree['artifacts_uri'] = uri
         self._run_artifacts_uri = os.path.join(uri, self.hash)
 
     @noexcept
@@ -466,7 +506,10 @@ class BasicRun(BaseRun, StructuredRunMixin):
         logger_info = (frame_info.filename, frame_info.lineno)
         self.track(LogRecord(msg, level, logger_info=logger_info, **params), name='__log_records')
         block = level > logging.WARNING
-        self._checkins.check_in(flag_name='new_logs', block=block)
+        if self._shared_session is not None:
+            self._shared_session.check_in(flag_name='new_logs', block=block)
+        else:
+            self._checkins.check_in(flag_name='new_logs', block=block)
 
     log_error = partialmethod(_log_message, logging.ERROR)
     log_warning = partialmethod(_log_message, logging.WARNING)
@@ -730,6 +773,16 @@ class BasicRun(BaseRun, StructuredRunMixin):
         self._props = None
         self._cleanup_trees()
 
+    def finalize(self):
+        if self._resources is None:
+            return
+        if self._shared_session is not None:
+            # A shared writer finalizes only its own lease. The server sets the
+            # run end time when the final lease is released.
+            self.close()
+        else:
+            self._resources.set_run_end_time()
+
     def dataframe(
         self,
         include_props: bool = True,
@@ -796,6 +849,8 @@ class BasicRun(BaseRun, StructuredRunMixin):
             expect_next_in: (:obj:`int`, optional): The number of seconds to wait before the next progress report.
             block: (:obj:`bool`, optional): If true, block the thread until the report is written to filesystem.
         """
+        if self._shared_session is not None:
+            return self._shared_session.report_progress(expect_next_in, block)
         if self._checkins is None:
             raise ValueError('Progress reports are not enabled for this run')
         self._checkins._check_in(expect_next_in=expect_next_in, block=block)
@@ -812,6 +867,8 @@ class BasicRun(BaseRun, StructuredRunMixin):
         Args:
             block: (:obj:`bool`, optional): If true, block the thread until the report is written to filesystem.
         """
+        if self._shared_session is not None:
+            return self._shared_session.report_successful_finish(block)
         if self._checkins is None:
             raise ValueError('Progress reports are not enabled for this run')
         self._checkins._report_successful_finish(block=block)
@@ -833,6 +890,7 @@ class Run(BasicRun):
          experiment (:obj:`str`, optional): Sets Run's `experiment` property. 'default' if not specified.
             Can be used later to query runs/sequences.
          force_resume (:obj:`bool`, optional): Forcefully resume stalled Run.
+         multi_writer (:obj:`bool`, optional): Share a writable remote run with other opt-in writers.
          system_tracking_interval (:obj:`int`, optional): Sets the tracking interval in seconds for system usage
             metrics (CPU, Memory, etc.). Set to `None` to disable system metrics tracking.
          log_system_params (:obj:`bool`, optional): Enable/Disable logging of system params such as installed packages,
@@ -848,11 +906,19 @@ class Run(BasicRun):
         read_only: bool = False,
         experiment: Optional[str] = None,
         force_resume: bool = False,
+        multi_writer: bool = False,
         system_tracking_interval: Optional[Union[int, float]] = DEFAULT_SYSTEM_TRACKING_INT,
         log_system_params: Optional[bool] = False,
         capture_terminal_logs: Optional[bool] = True,
     ):
-        super().__init__(run_hash, repo=repo, read_only=read_only, experiment=experiment, force_resume=force_resume)
+        super().__init__(
+            run_hash,
+            repo=repo,
+            read_only=read_only,
+            experiment=experiment,
+            force_resume=force_resume,
+            multi_writer=multi_writer,
+        )
 
         self._system_resource_tracker: ResourceTracker = None
         if not read_only:

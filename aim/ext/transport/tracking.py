@@ -90,9 +90,18 @@ class TrackingRouter:
     def cleanup_client_resources(cls, dead_client_uri):
         resource_handlers = list(cls.resource_pool.keys())
         for handler in resource_handlers:
-            (client_uri, _) = cls.resource_pool[handler]
+            resource_info = cls.resource_pool.get(handler)
+            if resource_info is None:
+                continue
+            client_uri, _ = resource_info
             if dead_client_uri == client_uri:
-                del cls.resource_pool[handler]
+                resource_info = cls.resource_pool.pop(handler, None)
+                if resource_info is None:
+                    continue
+                _, resource = resource_info
+                close = getattr(resource, 'close', None)
+                if close is not None:
+                    close()
 
     @classmethod
     def _verify_resource_handler(cls, resource_handler, client_uri):
@@ -112,6 +121,15 @@ class TrackingRouter:
 
         if not resource_handler:
             resource_handler = get_handler()
+        elif resource_handler in self.resource_pool:
+            # Reconnects re-register resources with their existing handler.
+            # Reuse a live resource so idempotent writer leases are not dropped
+            # and reacquired during a transient connection failure.
+            try:
+                self._verify_resource_handler(resource_handler, client_uri)
+                return {'handler': resource_handler}
+            except Exception as e:
+                return JSONResponse({'exception': build_exception(e)}, status_code=400)
 
         try:
             resource_cls = self.registry[resource_type]
@@ -151,8 +169,13 @@ class TrackingRouter:
 
     async def release_resource(self, client_uri, resource_handler):
         try:
+            if resource_handler not in self.resource_pool:
+                return
             self._verify_resource_handler(resource_handler, client_uri)
-            del self.resource_pool[resource_handler]
+            _, resource = self.resource_pool.pop(resource_handler)
+            close = getattr(resource, 'close', None)
+            if close is not None:
+                close()
         except Exception as e:
             logger.debug(f'Caught exception {e}. Sending response 400.')
             return JSONResponse(

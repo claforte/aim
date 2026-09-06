@@ -11,6 +11,7 @@ from aim.ext.transport.handlers import (
 )
 from aim.ext.transport.heartbeat import HeartbeatWatcher
 from aim.ext.transport.router import ClientRouter
+from aim.ext.transport.shared_run import SharedRunSessionRegistry, get_shared_run
 from aim.ext.transport.tracking import ResourceTypeRegistry, TrackingRouter
 from aim.ext.utils import fallback_exception_handler, http_exception_handler
 from fastapi import FastAPI
@@ -26,6 +27,7 @@ def prepare_resource_registry():
     registry.register('Lock', get_lock)
     registry.register('RunHeartbeat', get_run_heartbeat)
     registry.register('FileManager', get_file_manager)
+    registry.register('SharedRun', get_shared_run)
     return registry
 
 
@@ -66,5 +68,9 @@ def create_app():
     @api_app.get('/status/')
     async def status():
         return {'status': 'OK'}
+
+    @app.on_event('shutdown')
+    async def close_shared_runs():
+        SharedRunSessionRegistry.clear()
 
     return app

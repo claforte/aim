@@ -45,4 +45,8 @@ class ClientRouter:
             self.add_client(client_uri)
 
     async def disconnect(self, client_uri):
+        from aim.ext.transport.tracking import TrackingRouter
+
+        TrackingRouter.cleanup_client_resources(client_uri)
+        self.client_heartbeat_pool.pop(client_uri, None)
         self.remove_client(client_uri)

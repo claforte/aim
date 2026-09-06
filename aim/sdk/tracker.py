@@ -40,6 +40,7 @@ class SequenceInfo:
         self.time_view = None
         self.record_max_length = None
         self.step_hash_fn = None
+        self.first_step = None
 
 
 Selector = Tuple[int, str]
@@ -63,8 +64,9 @@ class RunTracker:
         self.meta_tree = run.meta_tree
         self.read_only = run.read_only
         self.contexts: Dict[Context, int] = dict()
+        self._shared_session = run._shared_session
 
-        if not self.read_only:
+        if not self.read_only and self._shared_session is None:
             # remote tracking creates dedicated thread for tracking, so don't need to create another one here
             self._non_blocking = os.getenv(AIM_ENABLE_TRACKING_THREAD, False) and not run.repo.is_remote_repo
 
@@ -75,6 +77,8 @@ class RunTracker:
             self.sequence_infos: Dict[Selector, SequenceInfo] = defaultdict(SequenceInfo)
 
             self._preload_sequence_infos()
+        else:
+            self.sequence_infos = {}
 
     def idx_to_ctx(self, idx):
         ctx = RunTracker._idx_to_ctx.get(idx)
@@ -95,6 +99,9 @@ class RunTracker:
         context: AimObject = None,
     ):
         assert not self.read_only
+        if self._shared_session is not None:
+            self._shared_session.track(value, name, step, epoch, context)
+            return
         # since worker might be lagging behind, we want to log the timestamp of run.track() call,
         # not the actual implementation execution time.
         track_time = datetime.datetime.now(pytz.utc).timestamp()
@@ -130,10 +137,19 @@ class RunTracker:
                 if not seq_info.initialized:
                     self._init_sequence_info(ctx.idx, name, val)
                 step = step if step is not None else seq_info.count
+                step_hash = seq_info.step_hash_fn(step)
+                try:
+                    seq_info.val_view[step_hash]
+                except KeyError:
+                    replacing = False
+                else:
+                    replacing = True
 
                 self._update_context_data(ctx)
                 self._update_sequence_info(ctx.idx, name, val, step)
                 self._add_value(seq_info, val, step, epoch, track_time)
+                if replacing:
+                    self._recompute_sequence_info(ctx.idx, name)
 
     def _preload_sequence_infos(self):
         for ctx_id, traces in self.meta_run_tree.get('traces', {}).items():
@@ -177,6 +193,7 @@ class RunTracker:
         seq_info.epoch_view = series_tree.subtree((ctx_id, name)).array('epoch', dtype='int64')
         seq_info.time_view = series_tree.subtree((ctx_id, name)).array('time', dtype='int64')
         seq_info.count = self.meta_run_tree['traces', ctx_id, name, 'last_step'] + 1
+        seq_info.first_step = self.meta_run_tree.get(('traces', ctx_id, name, 'first_step'), 0)
         seq_info.record_max_length = self.meta_run_tree.get(('traces', ctx_id, name, 'record_max_length'), 0)
 
         seq_info.initialized = True
@@ -189,6 +206,7 @@ class RunTracker:
         # new SequenceInfo, initialize
         # the subtree().array().allocate() method is write-only
         seq_info.count = 0
+        seq_info.first_step = None
         seq_info.record_max_length = 0
         seq_info.dtype = None
         seq_info.version = 2 if get_object_typename(val) in ('int', 'float') else 1
@@ -237,6 +255,12 @@ class RunTracker:
             self.meta_run_tree['traces', ctx_id, name, 'first_step'] = step
             self.meta_run_tree['typed_traces', trace_type, ctx_id, name] = 1
             seq_info.dtype = dtype
+            seq_info.first_step = step
+
+        elif step < seq_info.first_step:
+            self.meta_run_tree['traces', ctx_id, name, 'first'] = val
+            self.meta_run_tree['traces', ctx_id, name, 'first_step'] = step
+            seq_info.first_step = step
 
         if step >= seq_info.count:
             self.meta_run_tree['traces', ctx_id, name, 'last'] = val
@@ -255,6 +279,39 @@ class RunTracker:
             record_max_length = max(seq_info.record_max_length, len(val))
             self.meta_run_tree['traces', ctx_id, name, 'record_max_length'] = record_max_length
             seq_info.record_max_length = record_max_length
+
+    def _recompute_sequence_info(self, ctx_id: int, name: str):
+        """Rebuild derived metadata after replacing an existing record."""
+        seq_info = self.sequence_infos[ctx_id, name]
+        if seq_info.version == 2:
+            records = [(step, seq_info.val_view[step_hash]) for step_hash, step in seq_info.step_view.items()]
+        else:
+            records = list(seq_info.val_view.items())
+
+        if not records:
+            return
+        records.sort(key=lambda record: record[0])
+        first_step, first_value = records[0]
+        last_step, last_value = records[-1]
+        trace_path = ('traces', ctx_id, name)
+
+        self.meta_run_tree[trace_path + ('first_step',)] = first_step
+        self.meta_run_tree[trace_path + ('first',)] = first_value
+        self.meta_run_tree[trace_path + ('last_step',)] = last_step
+        self.meta_run_tree[trace_path + ('last',)] = last_value
+        seq_info.first_step = first_step
+        seq_info.count = last_step + 1
+
+        if seq_info.version == 2:
+            values = [value for _, value in records]
+            seq_info.min = min(values)
+            seq_info.max = max(values)
+            self.meta_run_tree[trace_path + ('min',)] = seq_info.min
+            self.meta_run_tree[trace_path + ('max',)] = seq_info.max
+
+        if isinstance(first_value, (tuple, list)):
+            seq_info.record_max_length = max(len(value) for _, value in records)
+            self.meta_run_tree[trace_path + ('record_max_length',)] = seq_info.record_max_length
 
     def _update_context_data(self, ctx: Context):
         if ctx not in self.contexts:

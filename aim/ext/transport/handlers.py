@@ -37,6 +37,9 @@ class ResourceRef:
     def ref(self):
         return self._resource
 
+    def close(self):
+        self._auto_clean.close()
+
 
 def get_handler():
     return str(uuid.uuid4())
@@ -56,6 +59,14 @@ def get_tree(**kwargs):
     if index:
         return ResourceRef(repo._get_index_tree(name, timeout))
     else:
+        if sub and read_only:
+            from aim.ext.transport.shared_run import SharedRunSessionRegistry
+
+            # Reuse the canonical writer's container while a shared session is
+            # live. A separately opened read-only RocksDB handle does not
+            # reliably refresh as the writer creates new SST files.
+            if SharedRunSessionRegistry.has_session(repo.path, sub):
+                read_only = False
         return ResourceRef(repo.request_tree(name, sub, read_only=read_only))
 
 
@@ -86,6 +97,13 @@ def get_lock(**kwargs):
     else:
         repo = Repo.default_repo()
     run_hash = kwargs['run_hash']
+    from aim.ext.transport.shared_run import SharedRunSessionRegistry
+    from aim.sdk.errors import RunLockingError
+
+    if SharedRunSessionRegistry.has_session(repo.path, run_hash):
+        raise RunLockingError(
+            f"Cannot acquire an exclusive lock for Run '{run_hash}': a shared writer session is active."
+        )
     # TODO Do we need to import SFRunLock here?
     from aim.sdk.lock_manager import SFRunLock
 
