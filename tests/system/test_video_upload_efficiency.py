@@ -146,8 +146,7 @@ def test_video_upload_many_files_is_efficient(tmp_path):
     max_rss_delta = _int_env(MAX_RSS_BYTES_ENV, max(512 * MIB, largest_video_bytes * 4))
     rss_delta = max(0, peak_rss - rss_before)
     assert rss_delta <= max_rss_delta, (
-        f'uploading {len(samples)} videos grew RSS by {rss_delta / MIB:.1f} MiB; '
-        f'limit is {max_rss_delta / MIB:.1f} MiB'
+        f'uploading {len(samples)} videos grew RSS by {rss_delta / MIB:.1f} MiB; limit is {max_rss_delta / MIB:.1f} MiB'
     )
 
     storage_multiplier = _float_env(MAX_STORAGE_MULTIPLIER_ENV, 2.0)
@@ -161,8 +160,7 @@ def test_video_upload_many_files_is_efficient(tmp_path):
     min_upload_mib_per_sec = _float_env(MIN_UPLOAD_MIB_PER_SEC_ENV, 0.5)
     upload_mib_per_sec = source_total_bytes / MIB / max(elapsed, 0.001)
     assert upload_mib_per_sec >= min_upload_mib_per_sec, (
-        f'video upload throughput was {upload_mib_per_sec:.2f} MiB/s; '
-        f'limit is {min_upload_mib_per_sec:.2f} MiB/s'
+        f'video upload throughput was {upload_mib_per_sec:.2f} MiB/s; limit is {min_upload_mib_per_sec:.2f} MiB/s'
     )
     logging_loop_mib_per_sec = source_total_bytes / MIB / max(logging_loop_elapsed, 0.001)
     assert logging_loop_mib_per_sec >= upload_mib_per_sec, 'async logging loop should not wait for full blob writes'
@@ -196,7 +194,9 @@ def test_video_upload_many_files_is_efficient(tmp_path):
                 blob_uri_by_step[step] = record['blob_uri']
 
             requested_steps = sorted({0, video_count // 2, video_count - 1})
-            response = client.post('/api/runs/videos/get-batch', json=[blob_uri_by_step[step] for step in requested_steps])
+            response = client.post(
+                '/api/runs/videos/get-batch', json=[blob_uri_by_step[step] for step in requested_steps]
+            )
             assert response.status_code == 200, response.text
 
             decoded_blobs = decode_tree(
@@ -305,9 +305,7 @@ def _safe_extract_tar(archive: tarfile.TarFile, destination: Path) -> None:
 def _samples_from_dataset_dir(dataset_dir: Path) -> List[VideoSample]:
     metadata_by_name = _load_manifest_metadata(dataset_dir)
     video_paths = sorted(
-        path
-        for path in dataset_dir.rglob('*')
-        if path.suffix.lower() in {'.mp4', '.m4v', '.mov', '.webm', '.gif'}
+        path for path in dataset_dir.rglob('*') if path.suffix.lower() in {'.mp4', '.m4v', '.mov', '.webm', '.gif'}
     )
     samples = []
     for idx, path in enumerate(video_paths):
