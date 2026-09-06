@@ -67,6 +67,61 @@ aim_run['params'] = {
 You are now ready to use `aim_run` object to track your experiment results. Below is the full example using 
 pytorch + aim remote tracking on MNIST dataset.
 
+### Share one run between training and evaluation processes
+
+Remote writers can opt in to sharing a run by passing `multi_writer=True`. The
+training process creates the run and publishes its hash through your job
+coordinator, checkpoint metadata, or another process-safe channel:
+
+```python
+from aim import Run
+
+run = Run(
+    repo='aim://aim-server:53800',
+    multi_writer=True,
+)
+publish_run_hash(run.hash)
+
+for step, loss in train():
+    run.track(loss, name='loss', step=step, context={'subset': 'train'})
+```
+
+Evaluation or monitoring processes reopen that hash and opt in as well:
+
+```python
+from aim import Run
+
+run_hash = receive_run_hash()
+run = Run(
+    run_hash,
+    repo='aim://aim-server:53800',
+    multi_writer=True,
+    system_tracking_interval=None,
+    capture_terminal_logs=False,
+)
+
+for step, accuracy in evaluate_checkpoints():
+    run.track(accuracy, name='accuracy', step=step, context={'subset': 'eval'})
+```
+
+The server serializes complete `track()` calls. If writers use the same name,
+context, and explicit step, the last operation committed by the server replaces
+that record. Existing later steps are retained. Calls without `step=` continue
+after the highest stored step, so checkpoint resumes that correct historical
+data should always provide explicit step values.
+
+The run remains active until its last writer closes or its client heartbeat
+expires. Reopening a finalized run starts a new shared session and marks it
+active until that session closes. Automatic system metrics and terminal capture
+are enabled by default; disable them on auxiliary writers, as above, unless
+combining those streams is intentional.
+
+All concurrent writers for a shared run must set `multi_writer=True`. This mode
+requires a writable `aim://` repository and the standard single-worker `aim
+server`, which remains the sole RocksDB writer. Concurrent direct access to the
+same local `.aim` directory and multi-worker tracking-server deployments are not
+supported in this first version.
+
 ```python
 from aim import Run
 
